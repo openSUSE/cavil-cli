@@ -101,7 +101,8 @@ subtest 'whole-tree scan reports clean, copied and skipped files' => sub {
 
   like $result->{stdout},   qr/3 files/,            'all three files checked';
   like $result->{stdout},   qr/2 with known code/,  'the known and novel files carry known code';
-  like $result->{stdout},   qr/1 too small/,        'the tiny file is too small to fingerprint';
+  like $result->{stdout},   qr/1 skipped/,          'the tiny file is skipped';
+  like $result->{stdout},   qr/too short/,          'and the checklist says it was too short to fingerprint';
   like $result->{stdout},   qr/at or above risk 5/, 'headline flags the gate breach';
   like $result->{stdout},   qr/GPL-3\.0-only/,      'the higher-risk match is shown, not the fuller permissive one';
   like $result->{stdout},   qr/risk 6/,             'with its risk';

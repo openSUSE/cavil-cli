@@ -13,12 +13,17 @@ use Text::Glob       qw(glob_to_regex);
 
 require Cavil::Matcher;
 
-# The client's fingerprint floor, matching the server's MIN_QUERY_FINGERPRINTS: fewer distinct fingerprints
-# than this cannot be located reliably, so such a region is reported "skipped" without troubling the server.
+# A file is fingerprinted only when it is plausibly source we can locate. Three rules decide the rest, and every
+# skip is reported (verdict "skipped" with a reason), never silently dropped, so scan coverage is always visible:
+#
+#   too short        - winnows to fewer than MIN_FINGERPRINTS; cannot be located reliably (matches the server's
+#                      MIN_QUERY_FINGERPRINTS floor, so we resolve it here without troubling the server)
+#   too large (bytes)- larger than MAX_FILE_BYTES; a blob we will not even read and winnow
+#   too large (fps)  - winnows to more than max_fingerprints (a data/generated/minified file); mirrors the
+#                      server's max_fingerprints, so such a file is not sent as a giant query that would make the
+#                      server gather most of the corpus
 use constant MIN_FINGERPRINTS => 8;
-
-# Files larger than this are not source we can usefully fingerprint; skip them so a stray blob cannot dominate.
-use constant MAX_FILE_BYTES => 2 * 1024 * 1024;
+use constant MAX_FILE_BYTES   => 2 * 1024 * 1024;
 
 # Top matches (by overlap) to fetch per region, so the report can lead with the highest-risk one it carries
 # rather than only the one it most resembles. A higher-risk match ranked below this by overlap is a weak signal.
@@ -33,6 +38,7 @@ has exclude_packages => sub { [] };    # packages to treat as "my own", so a wor
 has exclude_paths    => sub { [] };    # path globs/prefixes to skip entirely (e.g. test-fixture directories)
 has k                => 4;
 has w                => 8;
+has max_fingerprints => 5000;          # cap per file so a data blob or minified bundle is not sent as a giant query
 
 # Hidden = any path component starting with a dot. Skipped by default (config, CI, editor state), but surfaced
 # as a count and overridable with --hidden, because a hidden file could still be real copied source.
@@ -86,8 +92,8 @@ sub run ($self, $target, %opts) {
   $self->client->on_wait(sub { $self->progress->spin }) if $self->progress->enabled;
 
   $self->progress->start('Connecting');
-  my ($k, $w, $generation) = $self->_configure;
-  $self->k($k)->w($w);
+  my ($k, $w, $generation, $max) = $self->_configure;
+  $self->k($k)->w($w)->max_fingerprints($max);
 
   # Drop any cached search results from an older index generation before we rely on them.
   $self->cache->for_generation($generation) if $self->cache;
@@ -105,7 +111,11 @@ sub run ($self, $target, %opts) {
 # index and cached results are invalidated when it is rebuilt.
 sub _configure ($self) {
   my $cfg = $self->client->config;
-  return ($cfg->{k} // $self->k, $cfg->{w} // $self->w, $cfg->{generation});
+  return (
+    $cfg->{k} // $self->k,
+    $cfg->{w} // $self->w,
+    $cfg->{generation}, $cfg->{max_fingerprints} // $self->max_fingerprints
+  );
 }
 
 # Change-set scope: fingerprint the added regions of the diff and search for their provenance.
@@ -124,6 +134,7 @@ sub _check_diff ($self, $dir, $base, $staged) {
   ($regions, $license)  = _drop_regions($regions, \&_is_license_file);
   ($regions, $excluded) = _drop_regions($regions, sub ($f) { _excluded_path($f, $exclude) }) if $exclude;
 
+  my $max      = $self->max_fingerprints;
   my $progress = $self->progress;
   $progress->start('Fingerprinting changes', scalar @$regions);
   my (@queries, %meta, @findings, $done);
@@ -131,8 +142,10 @@ sub _check_diff ($self, $dir, $base, $staged) {
     $progress->tick(++$done);
     my $location = "$r->{file}:$r->{start}-$r->{end}";
     my ($fps, $span) = $self->_winnow_text($r->{text});
-    if (@$fps < MIN_FINGERPRINTS) {
-      push @findings, {location => $location, file => $r->{file}, verdict => 'skipped', licenses => []};
+    my $reason = @$fps < MIN_FINGERPRINTS ? 'too short' : $max && @$fps > $max ? 'too large' : undef;
+    if ($reason) {
+      push @findings,
+        {location => $location, file => $r->{file}, verdict => 'skipped', reason => $reason, licenses => []};
       next;
     }
     push @queries, {id => $location, fingerprints => $fps, span => $span};
@@ -174,7 +187,7 @@ sub _check_tree ($self, $dir) {
   my $cache    = $self->cache;
 
   # git only to enumerate files (so .gitignore is honoured); it plays no part in choosing the scope.
-  my ($files, $hidden, $license, $excluded) = $self->_tree_files($dir, _is_git_repo($dir));
+  my ($files, $oversize, $hidden, $license, $excluded) = $self->_tree_files($dir, _is_git_repo($dir));
 
   # Hash every file; keep one representative path per distinct content so each content is winnowed once.
   $progress->start('Hashing files', scalar @$files);
@@ -216,17 +229,20 @@ sub _check_tree ($self, $dir) {
   my @residual  = grep { !exists $known->{$_} } @hashes;
   my @to_search = grep { !exists $searched->{$_} } @residual;
 
-  # Winnow the residual once per content; too-small content is resolved without a request and cached too.
+  # Winnow the residual once per content; content that is too short or too large is resolved without a request
+  # (each reported with its reason) and cached too.
+  my $max = $self->max_fingerprints;
   $progress->start('Fingerprinting', scalar @to_search);
-  my (@queries, %too_small, $done);
+  my (@queries, %skipped, $done);
   for my $h (@to_search) {
     $progress->tick(++$done);
     my ($fps, $span) = $self->_winnow_file($abs_of{$h});
-    if (@$fps < MIN_FINGERPRINTS) { $too_small{$h} = {verdict => 'skipped', licenses => []} }
-    else                          { push @queries, {id => $h, fingerprints => $fps, span => $span} }
+    if    (@$fps < MIN_FINGERPRINTS) { $skipped{$h} = {verdict => 'skipped', reason => 'too short', licenses => []} }
+    elsif ($max && @$fps > $max)     { $skipped{$h} = {verdict => 'skipped', reason => 'too large', licenses => []} }
+    else                             { push @queries, {id => $h, fingerprints => $fps, span => $span} }
   }
-  $cache->store_search(\%too_small) if $cache && %too_small;
-  %$searched = (%$searched, %too_small);
+  $cache->store_search(\%skipped) if $cache && %skipped;
+  %$searched = (%$searched, %skipped);
 
   # Search, persisting each chunk so progress is never lost, then fold the results in.
   my $persist = $cache ? sub ($records) { $cache->store_search($records) } : undef;
@@ -251,11 +267,15 @@ sub _check_tree ($self, $dir) {
     else { push @findings, {%$base, %{$searched->{$h}}} }
   }
 
+  # Files too large to winnow at all (reported, never silently dropped), keyed by path since they are not hashed.
+  push @findings, {location => $_, file => $_, verdict => 'skipped', reason => 'too large', licenses => []}
+    for @$oversize;
+
   return {
     scope      => 'tree',
     target     => $dir,
     instance   => $self->client->url,
-    checked    => scalar @$files,
+    checked    => scalar(@$files) + scalar(@$oversize),
     hidden     => $hidden,
     licensedoc => $license,
     excluded   => $excluded,
@@ -360,7 +380,7 @@ sub _tree_files ($self, $dir, $git) {
   }
 
   my $exclude = @{$self->exclude_paths} ? _compile_excludes($self->exclude_paths) : undef;
-  my ($hidden, $license, $excluded, @files) = (0, 0, 0);
+  my ($hidden, $license, $excluded, @files, @oversize) = (0, 0, 0);
   for my $rel (@rel) {
     my $abs = path($dir)->child($rel);
     next unless -f $abs;
@@ -368,11 +388,12 @@ sub _tree_files ($self, $dir, $git) {
     if (!$self->hidden && _is_hidden($rel))         { $hidden++;   next }
     if (_is_license_file($rel))                     { $license++;  next }
     my $size = -s $abs;
-    next if !defined $size || $size == 0 || $size > MAX_FILE_BYTES;
-    next unless _is_text($abs);
+    next if !defined $size || $size == 0;
+    next unless _is_text($abs);                                   # binary: not source, silently not scanned
+    if ($size > MAX_FILE_BYTES) { push @oversize, $rel; next }    # too large to winnow: reported, not scanned
     push @files, {rel => $rel, abs => $abs->to_string};
   }
-  return (\@files, $hidden, $license, $excluded);
+  return (\@files, \@oversize, $hidden, $license, $excluded);
 }
 
 # A NUL byte in the first block marks a binary we should not try to fingerprint.

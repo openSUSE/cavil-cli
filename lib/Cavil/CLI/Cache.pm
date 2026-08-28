@@ -19,10 +19,6 @@ use Mojo::Util qw(sha1_sum);
 #            with the index generation and cleared when that changes (a reindex must not leave a stale answer).
 # The database is one file per instance host, so two Cavil servers never collide.
 #
-# ponytail: known is kept across reindexes for its immutable licenses/risk, but the carrier package and its
-# declared license it also holds are index-derived and can go stale after a reindex (a rare, advisory-only drift
-# - the declared license is a display hint that never drives the gate). Generation-tag known like search if that
-# staleness ever matters.
 
 # Well under SQLite's bound variable limit, for reading a set of hashes back.
 use constant IN_CHUNK => 500;

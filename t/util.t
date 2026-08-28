@@ -65,7 +65,7 @@ my @findings = (
     match    => {name => 'otherlib', filename => 'y.cfg'}
   },
   {location => 'mine.c',   verdict => 'unknown', licenses => []},
-  {location => 'logo.png', verdict => 'skipped', licenses => []}
+  {location => 'logo.png', verdict => 'skipped', reason   => 'too large', licenses => []}
 );
 
 subtest 'summarize rolls up counts, licenses and max risk' => sub {
@@ -93,7 +93,8 @@ subtest 'render_text grades findings by the Cavil risk scale' => sub {
   like $text,   qr/at or above risk 5/,                             'headline names the gate breach';
   like $text,   qr/1 clean/,                                        'tally counts the clean file';
   like $text,   qr/4 with known code/,                              'tally counts every match, any risk';
-  like $text,   qr/1 too small/,                                    'tally counts the too-small file';
+  like $text,   qr/1 skipped/,                                      'tally counts the skipped file';
+  like $text,   qr/logo\.png\s+too large/,                          'and the checklist shows why it was skipped';
   like $text,   qr/MIT\s+risk 2 \(permissive\)/,                    'permissive match labelled safe';
   like $text,   qr/GPL-3\.0-only\s+risk 4 \(strong copyleft\)/,     'copyleft match labelled with obligations';
   like $text,   qr/SSPL-1\.0\s+risk 6 \(restrictive obligations\)/, 'reject-lean match labelled';

@@ -37,4 +37,12 @@ subtest '--exclude-path matches directory prefixes and Text::Glob globs' => sub 
   ok Cavil::CLI::Scan::_excluded_path('log1.txt', $c->('log?.txt')),  '? matches one character';
 };
 
+subtest 'winnow rows dedup and span' => sub {
+  my $raw = [[10, 1, 1], [20, 2, 2], [10, 3, 3], [30, 4, 6]];    # 10 repeats; last row spans two lines
+
+  my ($fps, $span) = Cavil::CLI::Scan::_winnow_rows($raw);
+  is_deeply $fps, [10, 20, 30], 'distinct fingerprints in first-seen order';
+  is $span, 6, 'span covers the whole region (line 1 to 6)';
+};
+
 done_testing;

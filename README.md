@@ -32,20 +32,22 @@ problems first:
 ```
 $ cavil-cli check --all ./project
 ✗ 1 file at or above risk 5
-  42 files · 30 clean · 3 with known code · 9 too small
+  42 files · 30 clean · 3 with known code · 9 skipped
 
   ✗  src/net.c        SSPL-1.0  risk 6 (restrictive obligations)  modified 74% of mongodb src/net.c
   •  src/ls.c         MIT  risk 2 (permissive)  identical to coreutils src/ls.c
   •  src/opt.c        declared BSD-3-Clause  modified 61% of util-linux lib/opt.c
   ✓  src/local.c
-  ·  gen.h            too small
+  ·  gen.h            too short
+  ·  bundle.min.js    too large
 
   2 license files not scanned (a copy of a licence is not a finding)
 ```
 
-`✓` is your own or permissive code, `•` is known code worth knowing about, `✗` is at or above the risk gate,
-`·` was not scanned. When no per-file license is detected but the carrier package declares a short one, it is
-shown as a hint (`declared BSD-3-Clause`).
+`✓` is your own code (nothing known was found), `•` is known code - permissive with no real obligations, or
+worth a closer look, `✗` is at or above the risk gate, `·` was not scanned, with the reason (`too short` to
+locate, or `too large` - a data or generated file). When no per-file license is detected but the carrier
+package declares a short one, it is shown as a hint (`declared BSD-3-Clause`).
 
 ## Commands and options
 

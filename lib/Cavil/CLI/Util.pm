@@ -31,7 +31,7 @@ my %RISK_LABEL = (
 #   safe    - known code, but only permissive/public-domain (risk <= 2); no obligations to speak of
 #   note    - known code with obligations (risk 3 up to the gate); acceptable, but worth knowing
 #   problem - known code at or above the gate; this is what needs action (the only red)
-#   skipped - not scanned (binary, or too small to fingerprint)
+#   skipped - not scanned (too short, or too large, to fingerprint); the per-file reason says which
 # A wall of green ticks is deliberate: it shows every file was looked at. Colour tracks the risk scale above.
 my %STATUS_GLYPH
   = (clean => "\x{2713}", safe => "\x{2022}", note => "\x{2022}", problem => "\x{2717}", skipped => "\x{00b7}");
@@ -171,7 +171,7 @@ sub render_text ($report, %opts) {
 
   # One plain-language tally.
   my $scope = $diff ? 'changed regions' : 'files';
-  $out .= sprintf "  %d %s \x{b7} %d clean \x{b7} %d with known code \x{b7} %d too small\n\n", $report->{checked},
+  $out .= sprintf "  %d %s \x{b7} %d clean \x{b7} %d with known code \x{b7} %d skipped\n\n", $report->{checked},
     $scope, ($count{clean} // 0), $matched, ($count{skipped} // 0);
 
   # The checklist, problems first (so a cap never hides them), then clean files, then skipped; path order within.
@@ -202,7 +202,7 @@ sub render_text ($report, %opts) {
         : "identical to $from";
       push @cols, _paint($color, $STATUS_COLOR{$status}, $desc), $prov;
     }
-    elsif ($status eq 'skipped') { push @cols, 'too small' }
+    elsif ($status eq 'skipped') { push @cols, $f->{reason} // 'skipped' }
 
     $out .= '  ' . join('  ', grep {length} @cols) . "\n";
   }

@@ -200,8 +200,15 @@ intent. On top of that it skips hidden files (dotfiles and dot-directories) by d
 usually configuration and editor state rather than shipped source. That skip is a policy the tool chose, not
 the user, so unlike the ignore rules it is never silent: the report states how many hidden files were passed
 over and how to include them, because a hidden file could still be real copied source and a legal check must
-not quietly narrow its own coverage. Binary and oversized files are left out too, as there is nothing to
-fingerprint in them.
+not quietly narrow its own coverage.
+
+Two more skips are about what can be usefully fingerprinted, and both are reported per file (verdict "skipped"
+with a reason), never dropped in silence. A file that winnows to too few fingerprints is **too short** to locate
+reliably and is resolved locally without troubling the server. A file that is **too large** - either past a byte
+ceiling, so it is not even read, or winnowing to more fingerprints than the cap the server advertises - is a data,
+generated or minified blob rather than function-sized source; searching it would make the server gather most of
+the corpus for nothing, so it is skipped and reported instead. Binary files are the one silent exception, as
+there is nothing to fingerprint in them at all.
 
 Legal documents are skipped the same visible way. A repository's own LICENSE, COPYING or NOTICE matching some
 other project's copy of the same licence text is noise, not a finding, so those files are recognised by name
