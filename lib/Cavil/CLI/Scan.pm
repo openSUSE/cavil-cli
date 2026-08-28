@@ -139,7 +139,7 @@ sub _check_diff ($self, $dir, $base, $staged) {
   $progress->start('Fingerprinting changes', scalar @$regions);
   my (@queries, %meta, @findings, $done);
   for my $r (@$regions) {
-    $progress->tick(++$done);
+    $progress->tick(++$done, sprintf('Fingerprinting changes%s', _progress_file($r->{file})));
     my $location = "$r->{file}:$r->{start}-$r->{end}";
     my ($fps, $span) = $self->_winnow_text($r->{text});
     my $reason = @$fps < MIN_FINGERPRINTS ? 'too short' : $max && @$fps > $max ? 'too large' : undef;
@@ -240,7 +240,7 @@ sub _check_tree ($self, $dir) {
   $progress->start('Fingerprinting', scalar @to_search);
   my (@queries, %skipped, $done);
   for my $h (@to_search) {
-    $progress->tick(++$done);
+    $progress->tick(++$done, sprintf('Fingerprinting%s', _progress_file($file_of{$h})));
     my ($fps, $span) = $self->_winnow_file($abs_of{$h});
     if    (@$fps < MIN_FINGERPRINTS) { $skipped{$h} = {verdict => 'skipped', reason => 'too short', licenses => []} }
     elsif ($max && @$fps > $max)     { $skipped{$h} = {verdict => 'skipped', reason => 'too large', licenses => []} }

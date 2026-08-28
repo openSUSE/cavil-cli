@@ -57,4 +57,17 @@ subtest 'a spinning count update keeps the spinner, so the line does not flicker
   like $out,   qr/Searching, 10 left/, 'the updated count is shown';
 };
 
+subtest 'a labelled tick names the current item without resetting the counter, and always draws' => sub {
+  my $out = capture(
+    1,
+    sub ($p) {
+      $p->start('Fingerprinting', 100);
+      $p->tick(1, 'Fingerprinting - src/a.c');    # not a multiple of REDRAW_EVERY, but a label forces a draw
+      $p->tick(2, 'Fingerprinting - src/b.c');
+    }
+  );
+  like $out, qr{Fingerprinting - src/a\.c 1/100}, 'the first item is drawn with its file and the running count';
+  like $out, qr{Fingerprinting - src/b\.c 2/100}, 'and the next, so a pause shows the item it is pausing on';
+};
+
 done_testing;

@@ -28,10 +28,15 @@ sub start ($self, $label, $total = undef) {
   return $self;
 }
 
-sub tick ($self, $done) {
+# Advance a counting phase. An optional label updates the phase text mid-count (e.g. to name the current file)
+# without resetting the counter the way start() would. Count-only ticks are throttled so a fast loop does not
+# thrash the terminal; a tick that carries a label always redraws, so a phase that is about to pause on one item
+# (winnowing a single large file) shows that item during the pause rather than a stale one.
+sub tick ($self, $done, $label = undef) {
   return unless $self->enabled;
+  $self->label($label) if defined $label;
   my $total = $self->total;
-  return if $done % REDRAW_EVERY && (!defined $total || $done != $total);
+  return if !defined $label && $done % REDRAW_EVERY && (!defined $total || $done != $total);
   $self->_done($done);
   $self->_draw;
 }
