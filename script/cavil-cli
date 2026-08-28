@@ -1,0 +1,12 @@
+#!/usr/bin/perl
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+use strict;
+use warnings;
+
+use FindBin;
+BEGIN { unshift @INC, "$FindBin::Bin/../lib" }
+use Cavil::CLI;
+
+exit Cavil::CLI->new->run;

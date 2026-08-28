@@ -1,0 +1,14 @@
+Revision history for Cavil::CLI
+
+0.01   2026-08-28
+        - First release: a command-line client for Cavil that checks whether the code in a git change set or a
+          directory already exists in what Cavil has indexed (open source and commercial), reporting its
+          license and risk for a developer's laptop or CI.
+        - "check" checks the current git change set by default, or a whole tree given a path or --all; a risk
+          gate (--fail-on-risk, default 5) sets the exit code, with json output for CI.
+        - "whoami" verifies the configured URL and token, and "config" saves them to ~/.config/cavil-cli
+          (the token read from a hidden prompt, never the command line).
+        - Recognizes files by content hash first and only searches the residual, with an aggressive
+          per-instance cache so repeated and interrupted scans put almost no load on the server.
+        - Filters out noise: a repository's own license files, self-matches against its own indexed package
+          (--exclude-package), and excluded paths such as test fixtures (--exclude-path).

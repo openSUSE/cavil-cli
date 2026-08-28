@@ -1,0 +1,298 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+package Cavil::CLI;
+use Mojo::Base -base, -signatures;
+
+use Cavil::CLI::Cache;
+use Cavil::CLI::Client;
+use Cavil::CLI::Config;
+use Cavil::CLI::Progress;
+use Cavil::CLI::Scan;
+use Cavil::CLI::Util qw(gate render_json render_text);
+use Mojo::JSON       qw(to_json);
+use Mojo::Log;
+use Mojo::Util  qw(encode extract_usage getopt);
+use Time::HiRes ();
+
+our $VERSION = '0.01';
+
+has log    => sub { Mojo::Log->new };
+has client => sub { Cavil::CLI::Client->new };
+
+# Exit codes: clean, gate failed, usage/config problem, server/connection error.
+use constant {EXIT_CLEAN => 0, EXIT_GATE => 1, EXIT_USAGE => 2, EXIT_SERVER => 3};
+
+sub run ($self) {
+  getopt
+    'url=s'              => \my $url,
+    'token=s'            => \my $token,
+    'all'                => \my $all,
+    'since=s'            => \my $since,
+    'staged'             => \my $staged,
+    'fail-on-risk=i'     => \my $fail_on_risk,
+    'fail-on-unknown'    => \my $fail_on_unknown,
+    'exclude-package=s@' => \my $exclude_package,
+    'exclude-path=s@'    => \my $exclude_path,
+    'format=s'           => \my $format,
+    'hidden'             => \my $hidden,
+    'show'               => \my $show,
+    'no-color'           => \my $no_color,
+    'quiet'              => \my $quiet,
+    'h|help'             => \my $help;
+
+  return print(extract_usage) ? EXIT_CLEAN : EXIT_CLEAN if $help;
+
+  my ($command, $path) = @ARGV;
+  unless (defined $command && ($command eq 'check' || $command eq 'whoami' || $command eq 'config')) {
+    print STDERR extract_usage;
+    return EXIT_USAGE;
+  }
+
+  my $config = Cavil::CLI::Config->new;
+
+  # Saving settings needs no server (and never takes the token from the command line).
+  return $self->_config($config, $url, $token, $show) if $command eq 'config';
+
+  # Resolve credentials: flags win, then the environment (for CI), then the saved config file.
+  my $saved = $config->load;
+  $url   //= $ENV{CAVIL_URL}     // $saved->{url};
+  $token //= $ENV{CAVIL_API_KEY} // $saved->{token};
+  unless (defined $url && defined $token) {
+    print STDERR
+      "A Cavil URL and API token are required: pass --url / --token, set CAVIL_URL / CAVIL_API_KEY, or run 'cavil-cli config'\n";
+    return EXIT_USAGE;
+  }
+
+  return $self->_whoami({url => $url, token => $token, format => $format // 'text'}) if $command eq 'whoami';
+
+  # Packages to treat as "my own", so a working copy does not match its own indexed package. Flags and the env
+  # var (comma or whitespace separated) combine, deduped; the set also namespaces the cache (see Cache).
+  my %seen;
+  my @exclude = grep { !$seen{$_}++ } @{$exclude_package // []}, grep {length} split /[\s,]+/,
+    ($ENV{CAVIL_EXCLUDE_PACKAGES} // '');
+
+  # Path globs/prefixes to skip entirely (test fixtures and the like); combined the same way. A trailing slash
+  # is dropped so --exclude-path t/fixtures/ and t/fixtures behave alike.
+  my %seen_path;
+  my @exclude_paths = grep { !$seen_path{$_}++ } map {s{/\z}{}r} grep {length} @{$exclude_path // []}, split /[\s,]+/,
+    ($ENV{CAVIL_EXCLUDE_PATHS} // '');
+
+  $format //= 'text';
+  my $color = $format eq 'text' && !$no_color && !$ENV{NO_COLOR} && -t STDOUT;
+
+  # Live progress goes to STDERR, so it stays out of the report and any pipe; only shown on a real terminal.
+  my $progress = !$quiet && -t STDERR ? 1 : 0;
+
+  return $self->_check(
+    $path,
+    {
+      url              => $url,
+      token            => $token,
+      all              => $all,
+      since            => $since,
+      staged           => $staged,
+      fail_on_risk     => $fail_on_risk // 5,
+      fail_on_unknown  => $fail_on_unknown,
+      format           => $format,
+      color            => $color,
+      progress         => $progress,
+      hidden           => $hidden ? 1 : 0,
+      exclude_packages => \@exclude,
+      exclude_paths    => \@exclude_paths
+    }
+  );
+}
+
+# Save the Cavil URL and API token to the config file, or show what is stored. The token is never taken from
+# the command line (it would linger in shell history and process listings); it is read from a hidden prompt, or
+# from stdin when piped. --show never prints the token itself.
+sub _config ($self, $config, $url, $token, $show) {
+  my $saved = $config->load;
+
+  if ($show) {
+    print STDOUT 'Configuration file: ' . $config->file . "\n";
+    print STDOUT '  url:   ' . ($saved->{url} // '(not set)') . "\n";
+    print STDOUT '  token: ' . ($saved->{token} ? '******** (set)' : '(not set)') . "\n";
+    return EXIT_CLEAN;
+  }
+
+  print STDERR "Ignoring --token on the command line; enter it at the prompt instead (safer)\n" if defined $token;
+
+  # The URL is not secret, so it may come from --url; otherwise prompt, offering the current value as default.
+  if (defined $url) { $saved->{url} = $url }
+  else {
+    my $current = $saved->{url};
+    print STDERR 'Cavil URL' . (defined $current ? " [$current]" : '') . ': ';
+    my $line = readline STDIN;
+    chomp $line           if defined $line;
+    $saved->{url} = $line if defined $line && length $line;
+  }
+
+  # The token is secret: hidden prompt on a terminal, one stdin line when piped. Empty input keeps the existing.
+  my $entered = _read_secret('Cavil API token' . ($saved->{token} ? ' [keep existing]' : '') . ': ');
+  $saved->{token} = $entered if defined $entered && length $entered;
+
+  unless (length($saved->{url} // '') && length($saved->{token} // '')) {
+    print STDERR "A Cavil URL and API token are both required\n";
+    return EXIT_USAGE;
+  }
+
+  $config->save($saved);
+  print STDOUT 'Saved configuration to ' . $config->file . " (token hidden)\n";
+  return EXIT_CLEAN;
+}
+
+# Read one line without echoing it, so a typed token never appears on screen. Only toggles the terminal when
+# stdin is one; piped input (tests, scripts) is read as a plain line.
+sub _read_secret ($prompt) {
+  print STDERR $prompt;
+  my $hide = -t STDIN;
+  system('stty', '-echo') if $hide;
+  my $line = readline STDIN;
+  if ($hide) { system('stty', 'echo'); print STDERR "\n" }
+  chomp $line if defined $line;
+  return $line;
+}
+
+# Confirm the url and token work by asking the instance who the token belongs to, and time the round trip so a
+# user can also see the instance is reachable and responsive.
+sub _whoami ($self, $opts) {
+  my $client = $self->client->url($opts->{url})->token($opts->{token});
+  $client->log($self->log);
+
+  my $t0   = Time::HiRes::time;
+  my $info = eval { $client->whoami };
+  my $ms   = int((Time::HiRes::time - $t0) * 1000);
+  if (my $err = $@) {
+    chomp(my $msg = $err);
+    print STDERR "Not authenticated with $opts->{url}:\n  $msg\n"
+      . "Check --url / CAVIL_URL and --token / CAVIL_API_KEY.\n";
+    return EXIT_SERVER;
+  }
+
+  if ($opts->{format} eq 'json') {
+    print STDOUT encode('UTF-8', to_json({%$info, round_trip_ms => $ms}) . "\n");
+    return EXIT_CLEAN;
+  }
+
+  my $roles = @{$info->{roles} || []} ? join(', ', @{$info->{roles}}) : 'none';
+  print STDOUT encode('UTF-8',
+        "Authenticated as $info->{user} (id @{[$info->{id} // '?']}) on $opts->{url}\n"
+      . "  roles: $roles\n"
+      . "  write access: @{[$info->{write_access} ? 'yes' : 'no']}\n"
+      . "  round-trip: $ms ms\n");
+  return EXIT_CLEAN;
+}
+
+sub _check ($self, $path, $opts) {
+  my $client = $self->client->url($opts->{url})->token($opts->{token});
+  $client->log($self->log);
+  my $cache    = Cavil::CLI::Cache->new(url => $opts->{url}, exclude => $opts->{exclude_packages})->load;
+  my $progress = Cavil::CLI::Progress->new(enabled => $opts->{progress});
+  my $scan     = Cavil::CLI::Scan->new(
+    client           => $client,
+    cache            => $cache,
+    log              => $self->log,
+    progress         => $progress,
+    hidden           => $opts->{hidden},
+    exclude_packages => $opts->{exclude_packages},
+    exclude_paths    => $opts->{exclude_paths}
+  );
+
+  my $report = eval {
+    $scan->run(
+      $path // '.',
+      all        => $opts->{all},
+      since      => $opts->{since},
+      staged     => $opts->{staged},
+      path_given => defined $path
+    );
+  };
+  $progress->finish;
+  if (my $err = $@) {
+    print STDERR "Code search is not enabled on this Cavil instance\n" if $err =~ /code_search_disabled/;
+    print STDERR $err                                                  if $err !~ /code_search_disabled/;
+    return $err =~ /code_search_disabled/ ? EXIT_USAGE : EXIT_SERVER;
+  }
+
+  my $output
+    = $opts->{format} eq 'json'
+    ? render_json($report)
+    : render_text($report, color => $opts->{color}, fail_on_risk => $opts->{fail_on_risk});
+
+  # Encode once here at the output boundary; the renderers return character strings (glyphs and any Unicode in
+  # paths or licenses), and STDOUT is not given an encoding layer (it does not survive the test's in-memory
+  # capture reliably).
+  print STDOUT encode('UTF-8', $output);
+
+  my $g
+    = gate($report->{findings}, {fail_on_risk => $opts->{fail_on_risk}, fail_on_unknown => $opts->{fail_on_unknown}});
+  return $g->{failed} ? EXIT_GATE : EXIT_CLEAN;
+}
+
+1;
+
+=encoding utf8
+
+=head1 NAME
+
+Cavil::CLI - Check code against known open source and commercial code indexed by Cavil
+
+=head1 SYNOPSIS
+
+  Usage: cavil-cli <command> [DIR] [OPTIONS]
+
+    # Save the URL and token once (prompts for the token without echoing it)
+    cavil-cli config --url https://legaldb.suse.de
+
+    # Confirm the URL and token are set up right (and time the round trip)
+    cavil-cli whoami
+
+    # With no path, check the current git change set
+    cavil-cli check
+
+    # With a path, scan that whole tree
+    cavil-cli check ./project
+
+    # Machine-readable output for CI (URL and token from the environment)
+    CAVIL_URL=https://legaldb.suse.de CAVIL_API_KEY=1234 cavil-cli check --format json
+
+  Commands:
+    check [DIR]              Check a change set or tree for known code (the default workflow)
+    whoami                   Show the user the token belongs to, to verify login
+    config                   Save the URL and token to ~/.config/cavil-cli (--show to display, token masked)
+
+  The URL and token are resolved from --url/--token, then CAVIL_URL/CAVIL_API_KEY, then the saved config.
+
+  Options:
+        --url <url>          Cavil server URL (or CAVIL_URL)
+        --token <token>      Cavil API token (or CAVIL_API_KEY)
+        --all                Whole-tree scan of the current directory (a path already scans the whole tree)
+        --since <ref>        Check the diff against this ref instead of the default branch
+        --staged             Check staged changes only
+        --fail-on-risk <n>   Exit non-zero at risk n or above (default 5; only risk 1-2 is truly safe,
+                             3-4 is acceptable copyleft, escalation begins at 5)
+        --fail-on-unknown    Exit non-zero if any code has no known provenance
+        --exclude-package <name>
+                             Ignore matches carried only by this package, so a working copy of an
+                             open source project does not match its own indexed package. Repeatable;
+                             also read from CAVIL_EXCLUDE_PACKAGES (comma or space separated)
+        --exclude-path <glob>
+                             Skip files under this path entirely (e.g. test-fixture directories). A bare
+                             path excludes it and everything under it; otherwise a shell glob (as Cavil's
+                             ignore globs: * matches across /, so *.pattern matches anywhere). Repeatable;
+                             also read from CAVIL_EXCLUDE_PATHS
+        --format <format>    Output format, "text" (default) or "json"
+        --hidden             Also scan hidden files (dotfiles and dot-directories); skipped by default
+        --no-color           Disable coloured output
+        --quiet              Do not show the progress line while working
+    -h, --help               Show this summary of available options
+
+=head1 DESCRIPTION
+
+A command-line client that checks whether the code in a git change set or a directory already exists in the
+open source Cavil has indexed, reporting its license and risk. It is meant for a developer's laptop and for
+CI; see C<docs/Architecture.md> for the design.
+
+=cut
