@@ -37,6 +37,18 @@ subtest '--exclude-path matches directory prefixes and Text::Glob globs' => sub 
   ok Cavil::CLI::Scan::_excluded_path('log1.txt', $c->('log?.txt')),  '? matches one character';
 };
 
+subtest 'progress file suffix is truncated and skips empties' => sub {
+  is Cavil::CLI::Scan::_progress_file(''),           '',              'no file yields no suffix';
+  is Cavil::CLI::Scan::_progress_file(undef),        '',              'undef yields no suffix';
+  is Cavil::CLI::Scan::_progress_file('src/main.c'), ' - src/main.c', 'a short path is shown as-is';
+
+  my $long = 'a/very/deep/path/' . ('x' x 60) . '/module.c';
+  my $out  = Cavil::CLI::Scan::_progress_file($long);
+  ok length($out) <= 46, 'a long path is truncated so the status line cannot wrap';
+  like $out, qr/module\.c$/, 'keeping the informative tail';
+  like $out, qr/^ - \.\.\./, 'with a leading ellipsis to show it was cut';
+};
+
 subtest 'winnow rows dedup and span' => sub {
   my $raw = [[10, 1, 1], [20, 2, 2], [10, 3, 3], [30, 4, 6]];    # 10 repeats; last row spans two lines
 

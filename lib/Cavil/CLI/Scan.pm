@@ -152,8 +152,9 @@ sub _check_diff ($self, $dir, $base, $staged) {
     $meta{$location} = {location => $location, file => $r->{file}, start => $r->{start}, end => $r->{end}};
   }
 
-  # A diff region is a fragment, not a whole file, so it is not content-hash keyed and not cached.
-  my $by_id = $self->_resolve_queries(\@queries);
+  # A diff region is a fragment, not a whole file, so it is not content-hash keyed and not cached. Name a file per
+  # region on the progress line (query ids are file:start-end here, so map each back to just its file).
+  my $by_id = $self->_resolve_queries(\@queries, undef, {map { $_ => $meta{$_}{file} } keys %meta});
   push @findings, {%{$meta{$_->{id}}}, %{$by_id->{$_->{id}}}} for @queries;
 
   return {
@@ -189,13 +190,16 @@ sub _check_tree ($self, $dir) {
   # git only to enumerate files (so .gitignore is honoured); it plays no part in choosing the scope.
   my ($files, $oversize, $hidden, $license, $excluded) = $self->_tree_files($dir, _is_git_repo($dir));
 
-  # Hash every file; keep one representative path per distinct content so each content is winnowed once.
+  # Hash every file; keep one representative path per distinct content so each content is winnowed once. file_of
+  # maps that content back to a path, so the recognize/search progress lines can name a file and feel like they
+  # are moving through the tree (work is content-keyed, so the name is representative of each batch, not exact).
   $progress->start('Hashing files', scalar @$files);
-  my (%hash_of, %abs_of, $hashed);
+  my (%hash_of, %abs_of, %file_of, $hashed);
   for my $f (@$files) {
     my $h = Cavil::Matcher::content_hash($f->{abs});
     $hash_of{$f->{rel}} = $h;
-    $abs_of{$h} //= $f->{abs};
+    $abs_of{$h}  //= $f->{abs};
+    $file_of{$h} //= $f->{rel};
     $progress->tick(++$hashed);
   }
   my @hashes = keys %abs_of;
@@ -219,7 +223,8 @@ sub _check_tree ($self, $dir) {
       exclude_packages => $self->exclude_packages,
       on_chunk         => sub ($done, $chunk) {
         $cache->store_known($chunk) if $cache;
-        $progress->start(sprintf('Recognizing, %d left', $total - $done));
+        my ($h) = keys %$chunk;
+        $progress->start(sprintf('Recognizing, %d left%s', $total - $done, _progress_file($h && $file_of{$h})));
       }
     );
     %$known = (%$known, %$fresh);
@@ -244,9 +249,10 @@ sub _check_tree ($self, $dir) {
   $cache->store_search(\%skipped) if $cache && %skipped;
   %$searched = (%$searched, %skipped);
 
-  # Search, persisting each chunk so progress is never lost, then fold the results in.
+  # Search, persisting each chunk so progress is never lost, then fold the results in. file_of names a file per
+  # content for the progress line (query ids are content hashes here).
   my $persist = $cache ? sub ($records) { $cache->store_search($records) } : undef;
-  %$searched = (%$searched, %{$self->_resolve_queries(\@queries, $persist)});
+  %$searched = (%$searched, %{$self->_resolve_queries(\@queries, $persist, \%file_of)});
 
   # One finding per file, built from the content-keyed answers.
   my @findings;
@@ -284,8 +290,9 @@ sub _check_tree ($self, $dir) {
 }
 
 # Run the batched fingerprint search and return each query's content-derived result, keyed by query id. The
-# optional $persist callback is handed each chunk's records as they arrive, for incremental caching.
-sub _resolve_queries ($self, $queries, $persist = undef) {
+# optional $persist callback is handed each chunk's records as they arrive, for incremental caching. $names maps
+# a query id to a file to show on the progress line (never sent to the server, purely cosmetic).
+sub _resolve_queries ($self, $queries, $persist = undef, $names = {}) {
   return {} unless @$queries;
 
   # Run the remaining count down as chunks complete: a number that visibly drops feels like progress, where a
@@ -306,7 +313,9 @@ sub _resolve_queries ($self, $queries, $persist = undef) {
       my %records = map { $_->{id} => _record($_) } @$chunk;
       %by_id = (%by_id, %records);
       $persist->(\%records) if $persist;
-      $progress->start(sprintf('Searching, %d regions left', $total - $done));
+      my $id = @$chunk ? $chunk->[-1]{id} : undef;
+      $progress->start(
+        sprintf('Searching, %d regions left%s', $total - $done, _progress_file(defined $id && $names->{$id})));
     }
   );
 
@@ -358,6 +367,14 @@ sub _winnow_rows ($raw) {
     $hi = $r->[2] if !defined $hi || $r->[2] > $hi;
   }
   return (\@fps, defined $lo ? $hi - $lo + 1 : 1);
+}
+
+# A file suffix for a progress line, tail-truncated so the self-erasing status line never wraps (which would
+# leave leftovers, since the redraw only clears one line). Falsy input yields "", leaving the label unchanged.
+sub _progress_file ($name) {
+  return '' unless $name;
+  $name = '...' . substr($name, -40) if length $name > 43;
+  return " - $name";
 }
 
 # The files to scan: tracked and untracked-but-not-ignored in a git repo, everything otherwise, minus the VCS
