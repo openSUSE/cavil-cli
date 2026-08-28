@@ -1,5 +1,7 @@
 # Cavil CLI
 
+[![CI](https://github.com/openSUSE/cavil-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/openSUSE/cavil-cli/actions/workflows/ci.yml)
+
 A command-line client for [Cavil](https://github.com/openSUSE/cavil) that checks whether the code in a git
 change set or a directory already exists in what Cavil has indexed (open source and commercial), and reports
 its license and risk. It is built for a developer's laptop and for CI. It does not request a formal review or
