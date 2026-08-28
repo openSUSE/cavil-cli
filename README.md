@@ -2,10 +2,9 @@
 
 [![CI](https://github.com/openSUSE/cavil-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/openSUSE/cavil-cli/actions/workflows/ci.yml)
 
-A command-line client for [Cavil](https://github.com/openSUSE/cavil) that checks whether the code in a git
-change set or a directory already exists in what Cavil has indexed (open source and commercial), and reports
-its license and risk. It is built for a developer's laptop and for CI. It does not request a formal review or
-decide acceptability; it tells you what known code you are carrying and how risky it is.
+Your AI assistant can reproduce a licensed function verbatim in your code, as if it were your own. Cavil CLI
+checks a git change or a whole tree against what [Cavil](https://github.com/openSUSE/cavil) has indexed, open
+source and commercial, and reports the license and risk of any copied code before it ships.
 
 ## Usage
 
