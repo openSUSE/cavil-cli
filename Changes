@@ -1,6 +1,6 @@
 Revision history for Cavil::CLI
 
-0.01   UNRELEASED
+0.01   2026-08-29
         - First release: a command-line client for Cavil that checks whether the code in a git change set or a
           directory already exists in what Cavil has indexed (open source and commercial), reporting its
           license and risk for a developer's laptop or CI.
