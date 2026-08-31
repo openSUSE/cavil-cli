@@ -4,12 +4,14 @@
 package Cavil::CLI;
 use Mojo::Base -base, -signatures;
 
+use Cavil::CLI::Baseline;
 use Cavil::CLI::Cache;
 use Cavil::CLI::Client;
 use Cavil::CLI::Config;
 use Cavil::CLI::Progress;
 use Cavil::CLI::Scan;
 use Cavil::CLI::Util qw(gate render_json render_text);
+use Mojo::File       qw(path);
 use Mojo::JSON       qw(to_json);
 use Mojo::Log;
 use Mojo::Util  qw(encode extract_usage getopt);
@@ -25,13 +27,14 @@ use constant {EXIT_CLEAN => 0, EXIT_GATE => 1, EXIT_USAGE => 2, EXIT_SERVER => 3
 
 sub run ($self) {
   getopt
-    'url=s'              => \my $url,
-    'token=s'            => \my $token,
+    'url=s'              => \my $url_opt,
     'all'                => \my $all,
     'since=s'            => \my $since,
     'staged'             => \my $staged,
     'fail-on-risk=i'     => \my $fail_on_risk,
     'fail-on-unknown'    => \my $fail_on_unknown,
+    'baseline=s'         => \my $baseline,
+    'no-baseline'        => \my $no_baseline,
     'exclude-package=s@' => \my $exclude_package,
     'exclude-path=s@'    => \my $exclude_path,
     'format=s'           => \my $format,
@@ -44,23 +47,32 @@ sub run ($self) {
   return print(extract_usage) ? EXIT_CLEAN : EXIT_CLEAN if $help;
 
   my ($command, $path) = @ARGV;
-  unless (defined $command && ($command eq 'check' || $command eq 'whoami' || $command eq 'config')) {
+  unless (defined $command
+    && ($command eq 'check' || $command eq 'whoami' || $command eq 'config' || $command eq 'baseline'))
+  {
     print STDERR extract_usage;
     return EXIT_USAGE;
   }
 
   my $config = Cavil::CLI::Config->new;
 
-  # Saving settings needs no server (and never takes the token from the command line).
-  return $self->_config($config, $url, $token, $show) if $command eq 'config';
+  # Saving settings needs no server, and is the only place a URL may be given: see below.
+  return $self->_config($config, $url_opt, $show) if $command eq 'config';
 
-  # Resolve credentials: flags win, then the environment (for CI), then the saved config file.
-  my $saved = $config->load;
-  $url   //= $ENV{CAVIL_URL}     // $saved->{url};
-  $token //= $ENV{CAVIL_API_KEY} // $saved->{token};
+  if (defined $url_opt) {
+    print STDERR "--url only applies to 'cavil-cli config'; set CAVIL_URL (with CAVIL_API_KEY) to aim elsewhere\n";
+    return EXIT_USAGE;
+  }
+
+  # Server and token are resolved together, from one source, and never mixed. Taking the URL from one place and
+  # the token from another is how a token saved for one instance ends up being sent to a different one. For the
+  # same reason there is no --token at all: an argument is world-readable in ps and stays in shell history.
+  my ($url, $token)
+    = defined $ENV{CAVIL_URL}
+    || defined $ENV{CAVIL_API_KEY} ? ($ENV{CAVIL_URL}, $ENV{CAVIL_API_KEY}) : @{$config->load}{qw(url token)};
   unless (defined $url && defined $token) {
-    print STDERR
-      "A Cavil URL and API token are required: pass --url / --token, set CAVIL_URL / CAVIL_API_KEY, or run 'cavil-cli config'\n";
+    print STDERR "A Cavil URL and API token are required, from the same source:\n"
+      . "  run 'cavil-cli config' to save both, or set CAVIL_URL and CAVIL_API_KEY together\n";
     return EXIT_USAGE;
   }
 
@@ -84,30 +96,34 @@ sub run ($self) {
   # Live progress goes to STDERR, so it stays out of the report and any pipe; only shown on a real terminal.
   my $progress = !$quiet && -t STDERR ? 1 : 0;
 
-  return $self->_check(
-    $path,
-    {
-      url              => $url,
-      token            => $token,
-      all              => $all,
-      since            => $since,
-      staged           => $staged,
-      fail_on_risk     => $fail_on_risk // 4,
-      fail_on_unknown  => $fail_on_unknown,
-      format           => $format,
-      color            => $color,
-      progress         => $progress,
-      hidden           => $hidden ? 1 : 0,
-      exclude_packages => \@exclude,
-      exclude_paths    => \@exclude_paths
-    }
+  my %opts = (
+    url              => $url,
+    token            => $token,
+    all              => $all,
+    since            => $since,
+    staged           => $staged,
+    fail_on_risk     => $fail_on_risk // 4,
+    fail_on_unknown  => $fail_on_unknown,
+    format           => $format,
+    color            => $color,
+    progress         => $progress,
+    hidden           => $hidden ? 1 : 0,
+    exclude_packages => \@exclude,
+    exclude_paths    => \@exclude_paths,
+    baseline         => $baseline,
+    no_baseline      => $no_baseline
   );
+
+  # Recording a baseline is a whole-tree question ("what does this project already contain?"), so it always
+  # scans the tree rather than the change set.
+  return $self->_baseline($path, {%opts, all => 1}) if $command eq 'baseline';
+
+  return $self->_check($path, \%opts);
 }
 
-# Save the Cavil URL and API token to the config file, or show what is stored. The token is never taken from
-# the command line (it would linger in shell history and process listings); it is read from a hidden prompt, or
-# from stdin when piped. --show never prints the token itself.
-sub _config ($self, $config, $url, $token, $show) {
+# Save the Cavil URL and API token to the config file, or show what is stored. The token is read from a hidden
+# prompt, or from stdin when piped; there is no option to pass it, anywhere. --show never prints it.
+sub _config ($self, $config, $url, $show) {
   my $saved = $config->load;
 
   if ($show) {
@@ -116,8 +132,6 @@ sub _config ($self, $config, $url, $token, $show) {
     print STDOUT '  token: ' . ($saved->{token} ? '******** (set)' : '(not set)') . "\n";
     return EXIT_CLEAN;
   }
-
-  print STDERR "Ignoring --token on the command line; enter it at the prompt instead (safer)\n" if defined $token;
 
   # The URL is not secret, so it may come from --url; otherwise prompt, offering the current value as default.
   if (defined $url) { $saved->{url} = $url }
@@ -167,7 +181,7 @@ sub _whoami ($self, $opts) {
   if (my $err = $@) {
     chomp(my $msg = $err);
     print STDERR "Not authenticated with $opts->{url}:\n  $msg\n"
-      . "Check --url / CAVIL_URL and --token / CAVIL_API_KEY.\n";
+      . "Check the saved config ('cavil-cli config --show'), or CAVIL_URL / CAVIL_API_KEY.\n";
     return EXIT_SERVER;
   }
 
@@ -185,7 +199,8 @@ sub _whoami ($self, $opts) {
   return EXIT_CLEAN;
 }
 
-sub _check ($self, $path, $opts) {
+# Run a scan, or report why it could not run. Returns the report, or an exit code to hand straight back.
+sub _scan ($self, $path, $opts) {
   my $client = $self->client->url($opts->{url})->token($opts->{token});
   $client->log($self->log);
   my $cache    = Cavil::CLI::Cache->new(url => $opts->{url}, exclude => $opts->{exclude_packages})->load;
@@ -213,7 +228,48 @@ sub _check ($self, $path, $opts) {
   if (my $err = $@) {
     print STDERR "Code search is not enabled on this Cavil instance\n" if $err =~ /code_search_disabled/;
     print STDERR $err                                                  if $err !~ /code_search_disabled/;
-    return $err =~ /code_search_disabled/ ? EXIT_USAGE : EXIT_SERVER;
+    return (undef, $err =~ /code_search_disabled/ ? EXIT_USAGE : EXIT_SERVER);
+  }
+
+  return ($report, undef);
+}
+
+# Where the baseline for a scan of this path lives: it belongs to the project, not to the working directory the
+# command happened to run from.
+sub _baseline_file ($path, $opts) {
+  return $opts->{baseline} if defined $opts->{baseline};
+  return path($path // '.')->child(Cavil::CLI::Baseline::FILE)->to_string;
+}
+
+# Record the project's current matches as accepted, so later checks only report what is new.
+sub _baseline ($self, $path, $opts) {
+  my ($report, $exit) = $self->_scan($path, $opts);
+  return $exit unless $report;
+
+  my $file     = _baseline_file($path, $opts);
+  my $accepted = Cavil::CLI::Baseline->from_findings($report->{findings});
+  Cavil::CLI::Baseline->new(file => $file)->save($accepted);
+
+  my $n = scalar @$accepted;
+  print STDOUT encode('UTF-8',
+    sprintf("Wrote %d accepted %s to %s\n", $n, $n == 1 ? 'match' : 'matches', $file)
+      . "Commit it: later checks report only matches that are not in this file.\n");
+  return EXIT_CLEAN;
+}
+
+sub _check ($self, $path, $opts) {
+  my ($report, $exit) = $self->_scan($path, $opts);
+  return $exit unless $report;
+
+  # Drop what the project has already accepted. Only for a whole-tree scan: a diff already answers "what is new"
+  # by construction, and its regions are fragments with no stable identity to record.
+  if (!$opts->{no_baseline} && $report->{scope} eq 'tree') {
+    my $file     = _baseline_file($path, $opts);
+    my $baseline = Cavil::CLI::Baseline->new(file => $file)->load;
+    my $before   = scalar @{$report->{findings}};
+    $report->{findings}      = [grep { !$baseline->accepts($_) } @{$report->{findings}}];
+    $report->{accepted}      = $before - scalar @{$report->{findings}};
+    $report->{baseline_file} = $file;
   }
 
   my $output
@@ -258,16 +314,21 @@ Cavil::CLI - Check code against known open source and commercial code indexed by
     # Machine-readable output for CI (URL and token from the environment)
     CAVIL_URL=https://legaldb.suse.de CAVIL_API_KEY=1234 cavil-cli check --format json
 
+    # Accept the matches this project already has, so later checks only report new ones
+    cavil-cli baseline ./project
+
   Commands:
     check [DIR]              Check a change set or tree for known code (the default workflow)
+    baseline [DIR]           Record the tree's current matches as accepted, in .cavil-baseline.json
     whoami                   Show the user the token belongs to, to verify login
     config                   Save the URL and token to ~/.config/cavil-cli (--show to display, token masked)
 
-  The URL and token are resolved from --url/--token, then CAVIL_URL/CAVIL_API_KEY, then the saved config.
+  Credentials come from the saved config ("cavil-cli config"), or CAVIL_URL/CAVIL_API_KEY in CI, always as a
+  pair from one source. There is no --token (an argument is world-readable in ps and stays in shell history),
+  and --url is only accepted by "config", since aiming elsewhere would send it a token saved for this server.
 
   Options:
-        --url <url>          Cavil server URL (or CAVIL_URL)
-        --token <token>      Cavil API token (or CAVIL_API_KEY)
+        --url <url>          Cavil server URL, when saving settings ("config" only)
         --all                Whole-tree scan of the current directory (a path already scans the whole tree)
         --since <ref>        Check the diff against this ref instead of the default branch
         --staged             Check staged changes only
@@ -275,6 +336,8 @@ Cavil::CLI - Check code against known open source and commercial code indexed by
                              copy makes your work a derivative. 1-2 is obligation-free, 3 is file-level
                              copyleft, 5 and up escalate)
         --fail-on-unknown    Exit non-zero if any code has no known provenance
+        --baseline <file>    Use this baseline instead of DIR/.cavil-baseline.json
+        --no-baseline        Report every match, ignoring an existing baseline
         --exclude-package <name>
                              Ignore matches carried only by this package, so a working copy of an
                              open source project does not match its own indexed package. Repeatable;

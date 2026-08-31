@@ -23,9 +23,10 @@ cavil-cli check ./project
 cavil-cli check --all
 ```
 
-The URL and token are resolved from `--url` / `--token`, then `CAVIL_URL` / `CAVIL_API_KEY` (convenient for
-CI), then the saved config in `~/.config/cavil-cli`. `cavil-cli config --show` displays them with the token
-masked.
+Credentials come from the saved config in `~/.config/cavil-cli`, or from `CAVIL_URL` and `CAVIL_API_KEY` in CI
+- always as a pair, from one source. There is no `--token`, because an argument is world-readable in `ps` and
+stays in your shell history, and no `--url` outside `config`, because pointing at another server would send it
+a token saved for this one. `cavil-cli config --show` displays what is saved, with the token masked.
 
 A check prints a headline tied to the CI gate, a one-line tally, then a per-file (or per-region) checklist,
 problems first:
@@ -51,35 +52,96 @@ worth a closer look, `✗` is at or above the risk gate, `·` was not scanned, w
 locate, or `too large` - a data or generated file). When no per-file license is detected but the carrier
 package declares a short one, it is shown as a hint (`declared BSD-3-Clause`).
 
-## Commands and options
-
-Common to every command: `--url` / `--token` (or `CAVIL_URL` / `CAVIL_API_KEY`, or the saved config),
-`--no-color`, and `--quiet`.
-
-`check [DIR]` - check a git change set (no path) or a whole tree (a path, or `--all`):
+## Commands
 
 ```
---all                 Whole-tree scan of the current directory (a path already scans the whole tree)
---since <ref>         Diff against this ref instead of the default branch
---staged              Check staged changes only
---fail-on-risk <n>    Exit non-zero at risk n or above (default 4, strong copyleft: where a copy makes your
-                      work a derivative; raise it if you already ship copyleft, lower it to 3 if you cannot)
---fail-on-unknown     Exit non-zero if any code has no known provenance
---exclude-package <name>   Ignore matches carried only by this package, so a working copy of an open source
-                           project does not match its own indexed package (repeatable; CAVIL_EXCLUDE_PACKAGES)
---exclude-path <glob>      Skip files under this path entirely, e.g. test fixtures (repeatable;
-                           CAVIL_EXCLUDE_PATHS)
---format text|json    Output format (json for CI to police or store)
---hidden              Also scan hidden files (dotfiles); skipped by default
+cavil-cli <command> [DIR] [options]
 ```
 
-`whoami` - show who the token belongs to and time the round trip; `--format text|json`.
+| Command | Purpose |
+| --- | --- |
+| `check [DIR]` | Check a git change set, or a whole tree, for known code |
+| `baseline [DIR]` | Record a tree's current matches as already accepted |
+| `whoami` | Verify the configured URL and token |
+| `config` | Save the URL and token |
 
-`config` - save the URL and token to `~/.config/cavil-cli` (the token is read from a hidden prompt, never the
-command line); `--url <url>` to set the server, `--show` to print the saved settings with the token masked.
+Common options (`--format` applies to `check` and `whoami`):
 
-Exit codes: `0` clean, `1` the risk gate failed, `2` usage or configuration problem, `3` server or connection
-error.
+| Option | Description |
+| --- | --- |
+| `--format text\|json` | Output format; `json` for CI to police or store |
+| `--no-color` | Never colour the output (also honours `NO_COLOR`) |
+| `--quiet` | No progress output |
+| `-h`, `--help` | Show usage |
+
+### `check [DIR]`
+
+```sh
+cavil-cli check              # the current git change set
+cavil-cli check ./project    # a whole tree
+cavil-cli check --all        # the current directory as a tree
+```
+
+| Option | Description |
+| --- | --- |
+| `--all` | Scan the whole tree instead of the change set |
+| `--since <ref>` | Diff against this ref instead of the default branch |
+| `--staged` | Check staged changes only |
+| `--fail-on-risk <n>` | Exit non-zero at risk `n` or above (default `4`) |
+| `--fail-on-unknown` | Exit non-zero if any code has no known provenance |
+| `--baseline <file>` | Use this baseline instead of `DIR/.cavil-baseline.json` |
+| `--no-baseline` | Report every match, ignoring an existing baseline |
+| `--exclude-package <name>` | Ignore matches carried only by this package, so a working copy of an open source project does not match its own indexed package (repeatable, `CAVIL_EXCLUDE_PACKAGES`) |
+| `--exclude-path <glob>` | Skip files under this path entirely, e.g. test fixtures (repeatable, `CAVIL_EXCLUDE_PATHS`) |
+| `--hidden` | Also scan hidden files (dotfiles); skipped by default |
+
+The default gate of `4` is strong copyleft, where a copy makes your work a derivative. Raise it if you already
+ship copyleft, lower it to `3` if you cannot take in any.
+
+### `baseline [DIR]`
+
+```sh
+cavil-cli baseline ./project
+```
+
+Writes every current match to `DIR/.cavil-baseline.json`. Commit it, and later checks report only what is
+*not* in it - so the report stays about new code instead of repeating decisions you have already made.
+
+Entries are pinned to a file's content and to what it matched, and never hide a risk higher than the one
+accepted; see the [architecture guide](docs/Architecture.md) for the full rules. Takes the same `--baseline`,
+`--exclude-*` and `--hidden` options as `check`.
+
+### `whoami`
+
+```sh
+cavil-cli whoami
+```
+
+Shows who the token belongs to, and the round-trip time to the instance.
+
+### `config`
+
+```sh
+cavil-cli config --url https://legaldb.suse.de   # prompts for the token
+cavil-cli config --show
+```
+
+| Option | Description |
+| --- | --- |
+| `--url <url>` | Server to save |
+| `--show` | Print the saved settings, with the token masked |
+
+Settings are stored in `~/.config/cavil-cli`. The token is read from a hidden prompt (or stdin when piped),
+never from the command line, where it would linger in shell history and process listings.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Clean |
+| `1` | The risk gate failed |
+| `2` | Usage or configuration problem |
+| `3` | Server or connection error |
 
 ## Documentation
 

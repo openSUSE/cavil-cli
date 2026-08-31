@@ -44,11 +44,28 @@ subtest 'whoami json is machine readable for CI' => sub {
 
 subtest 'a bad token fails clearly and non-zero' => sub {
 
-  # Point at the mock but with a token it rejects, by overriding on the CLI's own args.
-  my $result = $test->run_command('whoami', '--token', 'wrong');
+  # Point at the mock but with a token it rejects. Credentials only ever come from the environment or the saved
+  # config, so a bad one is supplied the same way a user would supply a good one.
+  my $result = $test->run_with_env({CAVIL_URL => $test->url, CAVIL_API_KEY => 'wrong'}, 'whoami');
   isnt $result->{exit}, 0, 'a rejected login is non-zero';
   like $result->{stderr}, qr/Not authenticated/, 'says authentication failed';
   like $result->{stderr}, qr/CAVIL_API_KEY/,     'and points at what to check';
+};
+
+subtest 'a server and its token can only be given together' => sub {
+
+  # Mixing sources is how a token saved for one instance gets sent to another, so half a pair is refused
+  # outright rather than quietly completed from somewhere else.
+  for my $half ({CAVIL_URL => $test->url}, {CAVIL_API_KEY => 'test-token'}) {
+    my $result = $test->run_with_env($half, 'whoami');
+    is $result->{exit}, 2, 'one half of the pair is a usage error';
+    like $result->{stderr}, qr/from the same source/, 'and says why';
+  }
+
+  # --url would aim the saved token at a different server, so it is only accepted when saving settings.
+  my $aimed = $test->run_bare(['whoami', '--url', $test->url]);
+  is $aimed->{exit}, 2, '--url is refused outside the config command';
+  like $aimed->{stderr}, qr/only applies to 'cavil-cli config'/, 'pointing at the command that does take it';
 };
 
 subtest 'config saves credentials and later commands use them without any flags' => sub {
@@ -66,8 +83,6 @@ subtest 'config saves credentials and later commands use them without any flags'
   unlike $show->{stdout}, qr/test-token/,                 'the real token is never printed';
 
   # whoami with no flags and nothing in the environment now works, from the saved config alone.
-  local $ENV{CAVIL_URL}     = undef;
-  local $ENV{CAVIL_API_KEY} = undef;
   my $who = $test->run_bare(['whoami']);
   is $who->{exit}, 0, 'the saved credentials authenticate';
   like $who->{stdout}, qr/Authenticated as tester/, 'and identify the user';

@@ -16,9 +16,9 @@ use constant SEARCH_CHUNK => 10;
 
 has 'log';
 has 'on_wait';    # optional coderef, called ~10x/sec while a request is in flight (drives the spinner)
-has token => sub { die "A Cavil API token is required (--token or CAVIL_API_KEY)\n" };
+has token => sub { die "A Cavil API token is required (run 'cavil-cli config', or set CAVIL_API_KEY)\n" };
 has ua    => sub { Mojo::UserAgent->new->connect_timeout(30)->inactivity_timeout(120) };
-has url   => sub { die "A Cavil URL is required (--url or CAVIL_URL)\n" };
+has url   => sub { die "A Cavil URL is required (run 'cavil-cli config', or set CAVIL_URL)\n" };
 
 # The identity the API token belongs to: a quick way to confirm the url and token are set up right.
 sub whoami ($self) {

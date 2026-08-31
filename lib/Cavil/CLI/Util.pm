@@ -9,11 +9,11 @@ use Mojo::JSON      qw(to_json);
 use Mojo::URL       ();
 use Term::ANSIColor ();
 
-our @EXPORT_OK = qw(parse_diff summarize gate render_text render_json);
+our @EXPORT_OK = qw(parse_diff provenance summarize gate render_text render_json);
 
-# Cavil's authoritative risk scale (see the cavil-review-note skill): only 1-2 are truly safe, 3-4 carry
-# copyleft obligations but are acceptable, escalation begins at 5, and 6-7 are reject-lean. Shown next to the
-# number so a bare "risk 4" is not left to interpretation.
+# Cavil's authoritative risk scale (see the cavil-review-note skill): 1-2 are obligation-free, 3 is file-level
+# copyleft, 4 is strong copyleft (the default gate, where a copy makes the work a derivative), 5 and up
+# escalate, and 6-7 are reject-lean. Shown next to the number so a bare "risk 4" is not left to interpretation.
 my %RISK_LABEL = (
   1 => 'public domain',
   2 => 'permissive',
@@ -93,6 +93,15 @@ sub gate ($findings, $opts) {
 
 sub _paint ($on, $color, $text) { return $on && $color ? Term::ANSIColor::colored($text, $color) : $text }
 
+# What a finding is a copy of, in one phrase. Shared by the report and the baseline file, so an accepted entry
+# reads in review exactly as the line the user accepted did.
+sub provenance ($f) {
+  my $from = $f->{match} ? "$f->{match}{name} $f->{match}{filename}" : 'a known source';
+  return $f->{verdict} eq 'partial' && $f->{total}
+    ? sprintf('modified %d%% of %s', int(100 * $f->{aligned} / $f->{total} + 0.5), $from)
+    : "identical to $from";
+}
+
 # The packaging-declared license is only a useful hint when it is short: a single license or a simple OR/AND
 # choice. Production has declared licenses with 20+ SPDX identifiers (whole license catalogs) that say nothing
 # about the file, so above this many identifiers we drop it. Returns the expression if short, else undef.
@@ -118,7 +127,8 @@ sub render_json ($report) {
         max_risk => $s->{max_risk},
 
         # Skipped-by-policy counts, so a machine sees the coverage the text footer states.
-        skipped => {map { $_ => $report->{$_} // 0 } qw(hidden licensedoc excluded)}
+        skipped  => {map { $_ => $report->{$_} // 0 } qw(hidden licensedoc excluded)},
+        accepted => $report->{accepted} // 0
       },
       findings => $report->{findings}
     }
@@ -165,14 +175,21 @@ sub render_text ($report, %opts) {
     ? "\x{2713} new known code introduced, nothing at or above risk $threshold"
     : "\x{2713} known code found, nothing at or above risk $threshold"
     )
-    : _paint($color, 'green',
-    $diff ? "\x{2713} all clear, no new known code introduced" : "\x{2713} all clear, no known code found");
+    : _paint(
+    $color, 'green',
+    $diff
+    ? "\x{2713} all clear, no new known code introduced"
+    : $report->{accepted} ? "\x{2713} all clear, nothing new"           # known code was found, but all of it accepted
+    :                       "\x{2713} all clear, no known code found"
+    );
   my $out = "$headline\n";
 
-  # One plain-language tally.
+  # One plain-language tally. Baseline-accepted matches are counted here rather than only in a footer, so the
+  # parts still add up to what was checked and nothing looks quietly missing.
   my $scope = $diff ? 'changed regions' : 'files';
-  $out .= sprintf "  %d %s \x{b7} %d clean \x{b7} %d with known code \x{b7} %d skipped\n\n", $report->{checked},
-    $scope, ($count{clean} // 0), $matched, ($count{skipped} // 0);
+  $out .= sprintf "  %d %s \x{b7} %d clean \x{b7} %d with known code%s \x{b7} %d skipped\n\n", $report->{checked},
+    $scope, ($count{clean} // 0), $matched, ($report->{accepted} ? " \x{b7} $report->{accepted} accepted" : ''),
+    ($count{skipped} // 0);
 
   # The checklist, problems first (so a cap never hides them), then clean files, then skipped; path order within.
   my @ordered = sort {
@@ -195,12 +212,7 @@ sub render_text ($report, %opts) {
         $RISK_LABEL{$f->{risk}} // 'unclassified')
         : defined $declared ? "declared $declared"
         :                     'license unknown';
-      my $from = $f->{match} ? "$f->{match}{name} $f->{match}{filename}" : 'a known source';
-      my $prov
-        = $f->{verdict} eq 'partial' && $f->{total}
-        ? sprintf('modified %d%% of %s', int(100 * $f->{aligned} / $f->{total} + 0.5), $from)
-        : "identical to $from";
-      push @cols, _paint($color, $STATUS_COLOR{$status}, $desc), $prov;
+      push @cols, _paint($color, $STATUS_COLOR{$status}, $desc), provenance($f);
     }
     elsif ($status eq 'skipped') { push @cols, $f->{reason} // 'skipped' }
 
@@ -221,6 +233,10 @@ sub render_text ($report, %opts) {
     if $report->{licensedoc};
   push @notes, ($report->{excluded} == 1 ? '1 file' : "$report->{excluded} files") . ' excluded (--exclude-path)'
     if $report->{excluded};
+  push @notes,
+    ($report->{accepted} == 1 ? '1 match' : "$report->{accepted} matches")
+    . " already accepted in $report->{baseline_file}"
+    if $report->{accepted};
   $out .= "\n" . join('', map {"  $_\n"} @notes) if @notes;
 
   return $out;

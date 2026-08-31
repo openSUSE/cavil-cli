@@ -257,15 +257,19 @@ sub _check_tree ($self, $dir) {
   # One finding per file, built from the content-keyed answers.
   my @findings;
   for my $f (@$files) {
-    my $h    = $hash_of{$f->{rel}};
-    my $base = {location => $f->{rel}, file => $f->{rel}};
+    my $h = $hash_of{$f->{rel}};
+
+    # content is this file's own hash, carried so a baseline entry can pin the local bytes as well as what they
+    # matched; an exact match is the content itself, so the two are the same hash.
+    my $base = {location => $f->{rel}, file => $f->{rel}, content => $h};
     if (my $info = $known->{$h}) {
       push @findings,
         {
         %$base,
-        verdict  => 'exact',
-        licenses => $info->{licenses} // [],
-        risk     => $info->{risk},
+        verdict    => 'exact',
+        match_hash => $h,
+        licenses   => $info->{licenses} // [],
+        risk       => $info->{risk},
         ($info->{package}                  ? (match => {name => $info->{package}, filename => $info->{filename}}) : ()),
         (defined $info->{declared_license} ? (declared_license => $info->{declared_license})                      : ())
         };
@@ -335,11 +339,12 @@ sub _record ($res) {
   for my $m (@$matches) { $pick = $m if ($m->{risk} // -1) > ($pick->{risk} // -1) }
   my $where = $pick->{files}[0];
   return {
-    verdict  => 'partial',
-    licenses => $pick->{licenses} // [],
-    risk     => $pick->{risk},
-    aligned  => $pick->{aligned},
-    total    => $pick->{total},
+    verdict    => 'partial',
+    licenses   => $pick->{licenses} // [],
+    risk       => $pick->{risk},
+    aligned    => $pick->{aligned},
+    total      => $pick->{total},
+    match_hash => $pick->{hash},             # what it matched, so a baseline entry can pin the pair (see CLI::Baseline)
     ($where                            ? (match => {name => $where->{name}, filename => $where->{filename}}) : ()),
     (defined $pick->{declared_license} ? (declared_license => $pick->{declared_license})                     : ())
   };
