@@ -1,5 +1,11 @@
 Revision history for Cavil::CLI
 
+0.02   UNRELEASED
+        - The default risk gate is now 4 (strong copyleft) rather than 5. Risk 4 is where reciprocity applies
+          to the derivative work, so code absorbed at that level obliges the codebase around it; at the old
+          default a copied GPL function passed the gate as a mere note. Projects that already ship copyleft
+          can restore the previous behaviour with "--fail-on-risk 5".
+
 0.01   2026-08-29
         - First release: a command-line client for Cavil that checks whether the code in a git change set or a
           directory already exists in what Cavil has indexed (open source and commercial), reporting its

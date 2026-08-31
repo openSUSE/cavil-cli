@@ -32,10 +32,11 @@ problems first:
 
 ```
 $ cavil-cli check --all ./project
-✗ 1 file at or above risk 5
-  42 files · 30 clean · 3 with known code · 9 skipped
+✗ 2 files at or above risk 4
+  42 files · 29 clean · 4 with known code · 9 skipped
 
   ✗  src/net.c        SSPL-1.0  risk 6 (restrictive obligations)  modified 74% of mongodb src/net.c
+  ✗  src/hash.c       GPL-3.0-only  risk 4 (strong copyleft)  modified 68% of coreutils lib/hash.c
   •  src/ls.c         MIT  risk 2 (permissive)  identical to coreutils src/ls.c
   •  src/opt.c        declared BSD-3-Clause  modified 61% of util-linux lib/opt.c
   ✓  src/local.c
@@ -61,7 +62,8 @@ Common to every command: `--url` / `--token` (or `CAVIL_URL` / `CAVIL_API_KEY`, 
 --all                 Whole-tree scan of the current directory (a path already scans the whole tree)
 --since <ref>         Diff against this ref instead of the default branch
 --staged              Check staged changes only
---fail-on-risk <n>    Exit non-zero at risk n or above (default 5; only risk 1-2 is truly safe)
+--fail-on-risk <n>    Exit non-zero at risk n or above (default 4, strong copyleft: where a copy makes your
+                      work a derivative; raise it if you already ship copyleft, lower it to 3 if you cannot)
 --fail-on-unknown     Exit non-zero if any code has no known provenance
 --exclude-package <name>   Ignore matches carried only by this package, so a working copy of an open source
                            project does not match its own indexed package (repeatable; CAVIL_EXCLUDE_PACKAGES)

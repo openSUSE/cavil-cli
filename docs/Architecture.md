@@ -185,13 +185,21 @@ keeps the failures meaningful. The exit code is conventional: zero when clean, o
 distinct code for a usage or server problem, so any non-zero code is the simple signal CI acts on while the
 highest risk is shown in the report itself. A stricter project can also choose to fail on unrecognized code.
 
-The threshold follows Cavil's own risk scale rather than an invented one: only risk 1 and 2 (public domain,
-permissive) are truly obligation-free, 3 and 4 are copyleft that is acceptable but carries obligations,
-escalation begins at 5, and 6 and 7 are reject-lean. The default gate is 5, so a build fails exactly when a
-finding is something a human would need to review or refuse; the report colours a finding red only once it
-meets the gate, shows the acceptable-but-notable band in between, and leaves the truly safe uncoloured. A
-project with a stricter posture (say, a proprietary codebase that cannot take in any copyleft) lowers the
-threshold; the number shown next to each finding carries its plain-language meaning so the choice is informed.
+The threshold follows Cavil's own risk scale rather than an invented one: risk 1 and 2 (public domain,
+permissive) are obligation-free, 3 is weak copyleft whose reciprocity stops at the file, 4 is strong copyleft,
+5 and up escalate, and 6 and 7 are reject-lean. The default gate is 4, because that is where a copy stops being
+a fact about one file and starts being a fact about the whole work: strong copyleft applies reciprocity at the
+derivative-work level, so absorbing such code obliges the codebase around it. That is the decision the tool
+exists to put in front of a human, and it is exactly the case an AI assistant produces when it reproduces a
+function it was trained on.
+
+Note this is a stricter line than Cavil's own `acceptable_risk`, which sits at 4 meaning "4 and below is fine".
+The two are answering different questions, and the difference is the point: a distribution deliberately ships
+copyleft software, so for a package under review strong copyleft is unremarkable. Here the question is whether
+*your* code absorbed someone else's, where the same license is the thing you most need to be told about. A
+project that does ship copyleft raises the threshold; one that cannot take in any lowers it to 3. The report
+colours a finding red only once it meets the gate and shows the notable band in between, and the number next to
+each finding carries its plain-language meaning so the choice is informed.
 
 ## What is and is not scanned
 

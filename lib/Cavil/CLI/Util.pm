@@ -130,7 +130,7 @@ sub render_json ($report) {
 sub render_text ($report, %opts) {
   my $color     = $opts{color};
   my $findings  = $report->{findings};
-  my $threshold = $opts{fail_on_risk} // 5;
+  my $threshold = $opts{fail_on_risk} // 4;
   my $limit     = $opts{limit}        // 100;
 
   # Nothing was checked (an explicit diff with no changes, or an empty tree): say so plainly rather than

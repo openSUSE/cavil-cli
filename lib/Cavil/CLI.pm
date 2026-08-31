@@ -15,7 +15,7 @@ use Mojo::Log;
 use Mojo::Util  qw(encode extract_usage getopt);
 use Time::HiRes ();
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 has log    => sub { Mojo::Log->new };
 has client => sub { Cavil::CLI::Client->new };
@@ -92,7 +92,7 @@ sub run ($self) {
       all              => $all,
       since            => $since,
       staged           => $staged,
-      fail_on_risk     => $fail_on_risk // 5,
+      fail_on_risk     => $fail_on_risk // 4,
       fail_on_unknown  => $fail_on_unknown,
       format           => $format,
       color            => $color,
@@ -271,8 +271,9 @@ Cavil::CLI - Check code against known open source and commercial code indexed by
         --all                Whole-tree scan of the current directory (a path already scans the whole tree)
         --since <ref>        Check the diff against this ref instead of the default branch
         --staged             Check staged changes only
-        --fail-on-risk <n>   Exit non-zero at risk n or above (default 5; only risk 1-2 is truly safe,
-                             3-4 is acceptable copyleft, escalation begins at 5)
+        --fail-on-risk <n>   Exit non-zero at risk n or above (default 4, strong copyleft: the point where a
+                             copy makes your work a derivative. 1-2 is obligation-free, 3 is file-level
+                             copyleft, 5 and up escalate)
         --fail-on-unknown    Exit non-zero if any code has no known provenance
         --exclude-package <name>
                              Ignore matches carried only by this package, so a working copy of an

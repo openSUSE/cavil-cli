@@ -79,11 +79,26 @@ subtest 'summarize rolls up counts, licenses and max risk' => sub {
 };
 
 subtest 'gate fails on the risk threshold, not on mere matches' => sub {
-  ok gate(\@findings,  {fail_on_risk => 5})->{failed}, 'the risk-6 finding trips the default gate';
-  ok !gate(\@findings, {fail_on_risk => 7})->{failed}, 'raising the threshold to 7 passes';
-  ok gate(\@findings,  {fail_on_risk => 3})->{failed}, 'a stricter gate also trips on the GPL note';
+
+  # 4 is the default because strong copyleft applies reciprocity to the derivative work: absorbing it obliges
+  # the code around it, so it has to reach a human rather than pass as a note.
+  my $default = gate(\@findings, {fail_on_risk => 4});
+  ok $default->{failed}, 'the default gate trips';
+  is scalar @{$default->{risky}}, 2, 'on both the strong-copyleft and the higher-risk finding';
+  ok +(grep { $_->{risk} == 4 } @{$default->{risky}}), 'the GPL copy is one of them, not a mere note';
+
+  ok !gate(\@findings, {fail_on_risk => 7})->{failed}, 'a project that ships copyleft can raise the threshold';
+  ok gate(\@findings,  {fail_on_risk => 3})->{failed}, 'and one that takes in none can lower it to weak copyleft';
   ok gate(\@findings,  {fail_on_risk => 9, fail_on_unknown => 1})->{failed},
     'and fail-on-unknown trips on the clean file';
+};
+
+subtest 'the renderer defaults to the same threshold the command does' => sub {
+
+  # Two places carry the default (the option in Cavil::CLI, the fallback here); if they drift, the report would
+  # colour findings by one line while the exit code used another.
+  my $text = render_text({scope => 'tree', target => '.', checked => 1, findings => [$findings[1]]}, color => 0);
+  like $text, qr/at or above risk 4/, 'a strong-copyleft finding is a breach with no threshold given';
 };
 
 subtest 'render_text grades findings by the Cavil risk scale' => sub {

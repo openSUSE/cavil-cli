@@ -103,7 +103,7 @@ subtest 'whole-tree scan reports clean, copied and skipped files' => sub {
   like $result->{stdout},   qr/2 with known code/,  'the known and novel files carry known code';
   like $result->{stdout},   qr/1 skipped/,          'the tiny file is skipped';
   like $result->{stdout},   qr/too short/,          'and the checklist says it was too short to fingerprint';
-  like $result->{stdout},   qr/at or above risk 5/, 'headline flags the gate breach';
+  like $result->{stdout},   qr/at or above risk 4/, 'headline flags the gate breach at the default threshold';
   like $result->{stdout},   qr/GPL-3\.0-only/,      'the higher-risk match is shown, not the fuller permissive one';
   like $result->{stdout},   qr/risk 6/,             'with its risk';
   like $result->{stdout},   qr/curl/,               'and the higher-risk match provenance, not tidy';
@@ -156,7 +156,7 @@ subtest 'hidden files are skipped by default but can be included' => sub {
 subtest 'the risk threshold controls the gate' => sub {
   is $test->run('--all', $dir->to_string, '--fail-on-risk', 8)->{exit}, 0,
     'raising the threshold above the finding passes the gate';
-  is $test->run('--all', $dir->to_string, '--fail-on-risk', 6)->{exit}, 1, 'the default threshold still fails';
+  is $test->run('--all', $dir->to_string, '--fail-on-risk', 6)->{exit}, 1, 'a threshold at the finding still fails';
 };
 
 subtest 'json output is machine readable' => sub {
