@@ -17,7 +17,7 @@ use Mojo::Log;
 use Mojo::Util  qw(encode extract_usage getopt);
 use Time::HiRes ();
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 has log    => sub { Mojo::Log->new };
 has client => sub { Cavil::CLI::Client->new };

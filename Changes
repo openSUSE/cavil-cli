@@ -1,5 +1,7 @@
 Revision history for Cavil::CLI
 
+0.03   UNRELEASED
+
 0.02   2026-08-31
         - Removed --token, and --url is now accepted only by "config". A token passed as an argument is
           world-readable in ps output and stays in shell history, and once the token can only come from the
